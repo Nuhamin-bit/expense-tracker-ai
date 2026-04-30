@@ -1,18 +1,17 @@
 import pytesseract
 from PIL import Image
-import os
-
-# Try common Windows install paths
-possible_paths = [
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
-]
-
-for path in possible_paths:
-    if os.path.exists(path):
-        pytesseract.pytesseract.tesseract_cmd = path
-        break
 
 def extract_text(file):
-    image = Image.open(file)
-    return pytesseract.image_to_string(image)
+    try:
+        image = Image.open(file)
+        text = pytesseract.image_to_string(image)
+
+        # If OCR fails or returns empty
+        if not text or text.strip() == "":
+            return "No text detected in receipt."
+
+        return text
+
+    except Exception as e:
+        # IMPORTANT: prevents Render crash
+        return f"OCR unavailable in cloud environment. Error: {str(e)}"

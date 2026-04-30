@@ -1,80 +1,115 @@
 import streamlit as st
-from PIL import Image
-from datetime import datetime
+import pandas as pd
 
 from ocr import extract_text
-from classifier import predict_category
-from database import insert_expense, get_expenses
 from analysis import show_summary
-from utils import extract_amount, encrypt_data
+from classifier import predict_category
+from database import add_expense, get_expenses
 
-# -----------------------
-# STREAMLIT CONFIG
-# -----------------------
+# Optional fraud detection (safe import)
+try:
+    from fraud import apply_fraud_detection
+    FRAUD_AVAILABLE = True
+except:
+    FRAUD_AVAILABLE = False
+
+
+# ----------------------------
+# PAGE CONFIG
+# ----------------------------
 st.set_page_config(page_title="AI Expense Tracker", layout="wide")
 
 st.title("📊 AI-Powered Expense & Budget Tracker")
 st.write("Upload receipts to automatically extract, categorize, and analyze spending.")
 
-# -----------------------
+st.info("⚠️ OCR works locally. Cloud deployment uses fallback processing for stability.")
+
+
+# ----------------------------
 # UPLOAD RECEIPT
-# -----------------------
+# ----------------------------
 uploaded_file = st.file_uploader("📤 Upload Receipt Image", type=["jpg", "png", "jpeg"])
 
-if uploaded_file:
+if uploaded_file is not None:
 
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Receipt", use_container_width=True)
+    # ----------------------------
+    # OCR PROCESSING (SAFE)
+    # ----------------------------
+    text = extract_text(uploaded_file)
 
-    if st.button("🚀 Process Receipt"):
+    st.subheader("🧾 Extracted Text")
+    st.text_area("Receipt Text", text, height=200)
 
-        # OCR
-        text = extract_text(uploaded_file)
+    # ----------------------------
+    # AMOUNT EXTRACTION (SAFE)
+    # ----------------------------
+    import re
 
-        # AI classification (ML model)
-        category = predict_category(text)
+    amounts = re.findall(r"\$?\d+\.\d{2}", text)
+    amount = float(amounts[-1].replace("$", "")) if amounts else 0.0
 
-        # Extract amount
-        amount = extract_amount(text)
+    st.subheader("💰 Detected Amount")
+    st.write(f"${amount}")
 
-        # Encrypt raw receipt text (security requirement)
-        encrypted_text = encrypt_data(text)
+    # ----------------------------
+    # CATEGORY PREDICTION (ML)
+    # ----------------------------
+    category = predict_category(text)
 
-        # Store in database
-        insert_expense(
-            encrypted_text,
-            category,
-            amount,
-            datetime.now().strftime("%Y-%m-%d")
-        )
+    st.subheader("🤖 Category (AI Model)")
+    st.write(category)
 
-        # -----------------------
-        # RESULTS DISPLAY
-        # -----------------------
-        st.success("✅ Receipt Processed Successfully!")
+    # ----------------------------
+    # SAVE TO DATABASE
+    # ----------------------------
+    add_expense(amount, category, text)
 
-        st.write("### 🧾 Extracted Text")
-        st.text(text)
+    st.success("Receipt processed and saved successfully!")
 
-        st.write("### 💰 Detected Amount")
-        st.metric("Amount", f"${amount}")
-
-        st.write("### 🤖 Category (AI Model)")
-        st.success(category)
-
-# -----------------------
-# DASHBOARD SECTION
-# -----------------------
-st.write("---")
-st.header("📊 Analytics Dashboard")
-
-show_summary()
-
-# -----------------------
-# DATABASE VIEW
-# -----------------------
-st.write("---")
-st.header("📂 Stored Expenses")
+# ----------------------------
+# DASHBOARD
+# ----------------------------
+st.markdown("---")
+st.subheader("📈 Expense Dashboard")
 
 df = get_expenses()
-st.dataframe(df)
+
+if len(df) > 0:
+
+    # Convert amount column safely
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+
+    # ----------------------------
+    # FRAUD DETECTION (OPTIONAL)
+    # ----------------------------
+    if FRAUD_AVAILABLE:
+        df = apply_fraud_detection(df)
+
+    # ----------------------------
+    # METRICS
+    # ----------------------------
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("💰 Total Spending", f"${df['amount'].sum():.2f}")
+    col2.metric("📊 Avg Expense", f"${df['amount'].mean():.2f}")
+    col3.metric("🧾 Transactions", len(df))
+
+    # ----------------------------
+    # CHART
+    # ----------------------------
+    st.subheader("📊 Spending by Category")
+    chart_data = df.groupby("category")["amount"].sum()
+    st.bar_chart(chart_data)
+
+    # ----------------------------
+    # TABLE
+    # ----------------------------
+    st.subheader("📜 Recent Transactions")
+
+    if FRAUD_AVAILABLE:
+        st.dataframe(df[["amount", "category", "fraud_flag"]].tail(10))
+    else:
+        st.dataframe(df.tail(10))
+
+else:
+    st.warning("No expenses found yet. Upload a receipt to begin.")
