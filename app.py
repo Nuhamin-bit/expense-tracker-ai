@@ -1,142 +1,150 @@
 import streamlit as st
 from PIL import Image
 
-# Local modules
 from ocr import extract_text
 from receipt_parser import parse_receipt
 from classifier import predict_category
-from database import add_expense, get_expenses
+from database import init_db, add_expense, get_expenses
+from fraud_model import train_fraud_model, detect_fraud
+from budget import set_budget, get_budgets, check_budget_status
+
+import pandas as pd
 
 
 # ----------------------------
-# PAGE CONFIG
+# INIT
 # ----------------------------
-st.set_page_config(
-    page_title="AI Expense Tracker",
-    page_icon="📊",
-    layout="wide"
-)
+init_db()
+st.set_page_config(page_title="AI Expense System", layout="wide")
 
 st.title("📊 AI Expense & Budget Intelligence System")
-st.subheader("Smart Receipt Processing • Categorization • Analytics")
 
 
 # ----------------------------
-# SIDEBAR - UPLOAD
+# SIDEBAR - BUDGET
 # ----------------------------
-st.sidebar.header("📤 Upload Receipt")
+st.sidebar.header("💰 Budget Setup")
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload receipt image",
-    type=["png", "jpg", "jpeg"]
-)
+cat_input = st.sidebar.text_input("Category")
+limit_input = st.sidebar.number_input("Monthly Limit", min_value=0.0)
+
+if st.sidebar.button("Set Budget"):
+    if cat_input:
+        set_budget(cat_input, limit_input)
+        st.sidebar.success("Budget saved!")
 
 
 # ----------------------------
-# MAIN LOGIC
+# UPLOAD RECEIPT
 # ----------------------------
+uploaded_file = st.file_uploader("Upload Receipt", type=["png", "jpg", "jpeg"])
+
+
 if uploaded_file:
 
-    # Show image
     image = Image.open(uploaded_file)
-    st.image(image, caption="Uploaded Receipt", use_column_width=True)
+    st.image(image, caption="Receipt")
 
-    # OCR STEP
+    # OCR
     text = extract_text(uploaded_file)
 
-    st.markdown("## 🧾 Extracted Text")
+    st.subheader("🧾 Extracted Text")
     st.write(text)
 
-    # ----------------------------
-    # PARSE RECEIPT (SAFE)
-    # ----------------------------
+    # Parsing
     parsed = parse_receipt(text)
 
-    amount = parsed.get("total", 0.0)
-    subtotal = parsed.get("subtotal", 0.0)
-    tax = parsed.get("tax", 0.0)
-    gallons = parsed.get("gallons", 0.0)
+    amount = parsed["total"]
+    subtotal = parsed["subtotal"]
+    tax = parsed["tax"]
+    gallons = parsed["gallons"]
 
-    # ----------------------------
-    # ML CATEGORY
-    # ----------------------------
+    # ML Category
     category, confidence = predict_category(text)
 
     # ----------------------------
-    # FRAUD DETECTION (RULE-BASED MVP)
+    # FRAUD MODEL
     # ----------------------------
-    fraud_score = 0
+    df = get_expenses()
+    model = train_fraud_model(df)
 
-    if amount > 500:
-        fraud_score += 40
-    if "REFUND" in text.upper():
-        fraud_score += 30
-    if amount == 0:
-        fraud_score += 50
-
-    fraud_label = "⚠️ Suspicious" if fraud_score > 50 else "✅ Normal"
-
+    fraud_score = detect_fraud(model, amount)
 
     # ----------------------------
-    # UI RESULTS
-    # ----------------------------
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("💵 Total", f"${amount:.2f}")
-
-    with col2:
-        st.metric("🤖 Category", category)
-
-    with col3:
-        st.metric("🧠 Confidence", f"{confidence}%")
-
-    st.markdown("### 🚨 Fraud Analysis")
-    st.write(f"Fraud Score: **{fraud_score}/100**")
-    st.write(f"Status: {fraud_label}")
-
-    # ----------------------------
-    # BREAKDOWN
-    # ----------------------------
-    st.markdown("### 📊 Financial Breakdown")
-
-    b1, b2, b3 = st.columns(3)
-
-    b1.metric("Subtotal", f"${subtotal:.2f}")
-    b2.metric("Tax", f"${tax:.2f}")
-    b3.metric("Gallons", f"{gallons:.2f}")
-
-
-    # ----------------------------
-    # SAVE TO DATABASE
+    # SAVE TO DB
     # ----------------------------
     add_expense(amount, category, text)
 
-    st.success("Transaction saved successfully!")
+    st.success("Transaction saved!")
+
+
+    # ----------------------------
+    # DISPLAY RESULTS
+    # ----------------------------
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("💵 Total", f"${amount:.2f}")
+    col2.metric("🤖 Category", category)
+    col3.metric("🧠 Confidence", f"{confidence}%")
+
+
+    st.subheader("🚨 Fraud Detection")
+
+    if fraud_score > 70:
+        st.error(f"High Fraud Risk: {fraud_score}/100")
+    elif fraud_score > 30:
+        st.warning(f"Medium Risk: {fraud_score}/100")
+    else:
+        st.success(f"Normal Transaction: {fraud_score}/100")
+
+
+    st.subheader("📊 Breakdown")
+    st.write(f"Subtotal: ${subtotal}")
+    st.write(f"Tax: ${tax}")
+    st.write(f"Gallons: {gallons}")
 
 
 # ----------------------------
-# DASHBOARD (HISTORY)
+# DASHBOARD
 # ----------------------------
 st.markdown("---")
-st.markdown("## 📈 Business Dashboard")
+st.subheader("📈 Dashboard")
 
 df = get_expenses()
 
 if not df.empty:
 
-    total_spending = df["amount"].sum()
-    avg_expense = df["amount"].mean()
-    count = len(df)
+    total = df["amount"].sum()
+    avg = df["amount"].mean()
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Total Spending", f"${total_spending:.2f}")
-    c2.metric("Average Expense", f"${avg_expense:.2f}")
-    c3.metric("Transactions", count)
+    c1.metric("Total Spending", f"${total:.2f}")
+    c2.metric("Average", f"${avg:.2f}")
+    c3.metric("Transactions", len(df))
 
-    st.markdown("### 📊 Category Breakdown")
+    st.subheader("📊 Category Breakdown")
     st.bar_chart(df["category"].value_counts())
 
+    # ----------------------------
+    # BUDGET CHECK
+    # ----------------------------
+    st.subheader("💰 Budget Status")
+
+    budgets = dict(get_budgets())
+
+    for cat, limit in budgets.items():
+        spent = df[df["category"] == cat]["amount"].sum()
+        status = check_budget_status(cat, spent)
+
+        st.write(f"**{cat}**: ${spent:.2f} / ${limit}")
+
+        if status == "❌ OVER BUDGET":
+            st.error(status)
+        elif status == "⚠️ WARNING":
+            st.warning(status)
+        else:
+            st.success(status)
+
 else:
-    st.info("No transactions yet. Upload a receipt to begin.")
+    st.info("No transactions yet.")

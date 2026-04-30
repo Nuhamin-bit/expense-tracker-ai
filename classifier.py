@@ -1,8 +1,12 @@
-import pickle
-
-model = pickle.load(open("model/expense_model.pkl", "rb"))
-vectorizer = pickle.load(open("model/vectorizer.pkl", "rb"))
-
 def predict_category(text):
-    vec = vectorizer.transform([text])
-    return model.predict(vec)[0]
+
+    text = text.lower()
+
+    if "fuel" in text or "gas" in text:
+        return "Travel", 85
+    elif "restaurant" in text or "food" in text:
+        return "Food", 80
+    elif "uber" in text:
+        return "Transport", 78
+    else:
+        return "Other", 60
