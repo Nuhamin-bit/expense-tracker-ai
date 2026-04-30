@@ -5,7 +5,7 @@ DB_NAME = "expenses.db"
 
 
 # ----------------------------
-# INIT DB
+# INIT DB (AUTO MIGRATE SAFE)
 # ----------------------------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -20,12 +20,18 @@ def init_db():
         )
     """)
 
+    # SAFE MIGRATION: add missing column if old DB exists
+    try:
+        c.execute("ALTER TABLE expenses ADD COLUMN receipt_text TEXT")
+    except:
+        pass
+
     conn.commit()
     conn.close()
 
 
 # ----------------------------
-# ADD EXPENSE (FIX FOR YOUR ERROR)
+# ADD EXPENSE
 # ----------------------------
 def add_expense(amount, category, receipt_text):
     conn = sqlite3.connect(DB_NAME)
@@ -45,14 +51,12 @@ def add_expense(amount, category, receipt_text):
 # ----------------------------
 def get_expenses():
     conn = sqlite3.connect(DB_NAME)
-
     df = pd.read_sql_query("SELECT * FROM expenses", conn)
-
     conn.close()
     return df
 
 
 # ----------------------------
-# AUTO INIT ON IMPORT
+# INIT ON IMPORT
 # ----------------------------
 init_db()
