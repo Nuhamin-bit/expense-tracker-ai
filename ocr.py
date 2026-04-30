@@ -1,6 +1,9 @@
-import pytesseract
 from PIL import Image
+import pytesseract
 
 def extract_text(uploaded_file):
     image = Image.open(uploaded_file)
-    return pytesseract.image_to_string(image)
+    try:
+        return pytesseract.image_to_string(image)
+    except Exception:
+        return "OCR failed (fallback mode)"

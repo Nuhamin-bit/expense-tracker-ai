@@ -1,51 +1,21 @@
-import sqlite3
-
-DB = "expenses.db"
+from database import get_expenses, get_budgets
 
 
-def set_budget(category, limit):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS budgets (
-            category TEXT PRIMARY KEY,
-            monthly_limit REAL
-        )
-    """)
-
-    c.execute("""
-        INSERT OR REPLACE INTO budgets (category, monthly_limit)
-        VALUES (?, ?)
-    """, (category, limit))
-
-    conn.commit()
-    conn.close()
-
-
-def get_budgets():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT category, monthly_limit FROM budgets")
-    data = c.fetchall()
-
-    conn.close()
-    return data
-
-
-def check_budget_status(category, spent):
+def check_budget_alerts():
+    expenses = get_expenses()
     budgets = dict(get_budgets())
 
-    if category not in budgets:
-        return None
+    totals = {}
 
-    limit = budgets[category]
-    usage = (spent / limit) * 100
+    for amount, category in expenses:
+        totals[category] = totals.get(category, 0) + amount
 
-    if usage >= 100:
-        return "❌ OVER BUDGET"
-    elif usage >= 80:
-        return "⚠️ WARNING"
-    else:
-        return "✅ OK"
+    alerts = []
+
+    for category, total in totals.items():
+        limit = budgets.get(category)
+
+        if limit and total > limit:
+            alerts.append(f"{category} OVER BUDGET: ${total} / ${limit}")
+
+    return alerts

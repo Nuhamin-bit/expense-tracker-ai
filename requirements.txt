@@ -1,6 +1,6 @@
 streamlit
-pytesseract
-pillow
 pandas
 scikit-learn
-cryptography
+pillow
+pytesseract
+numpy

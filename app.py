@@ -1,150 +1,106 @@
 import streamlit as st
-from PIL import Image
+import re
+
+from database import (
+    init_db,
+    add_expense,
+    get_expenses,
+    set_budget,
+    get_budgets
+)
 
 from ocr import extract_text
-from receipt_parser import parse_receipt
-from classifier import predict_category
-from database import init_db, add_expense, get_expenses
-from fraud_model import train_fraud_model, detect_fraud
-from budget import set_budget, get_budgets, check_budget_status
 
-import pandas as pd
-
-
-# ----------------------------
-# INIT
-# ----------------------------
+# ---------------- INIT ----------------
 init_db()
-st.set_page_config(page_title="AI Expense System", layout="wide")
 
-st.title("📊 AI Expense & Budget Intelligence System")
+st.set_page_config(page_title="AI Expense Tracker", layout="centered")
 
+st.title("📊 AI Expense & Budget Tracker")
+st.write("Upload receipts, track spending, and manage budgets")
 
-# ----------------------------
-# SIDEBAR - BUDGET
-# ----------------------------
-st.sidebar.header("💰 Budget Setup")
-
-cat_input = st.sidebar.text_input("Category")
-limit_input = st.sidebar.number_input("Monthly Limit", min_value=0.0)
-
-if st.sidebar.button("Set Budget"):
-    if cat_input:
-        set_budget(cat_input, limit_input)
-        st.sidebar.success("Budget saved!")
-
-
-# ----------------------------
-# UPLOAD RECEIPT
-# ----------------------------
-uploaded_file = st.file_uploader("Upload Receipt", type=["png", "jpg", "jpeg"])
-
+# ---------------- UPLOAD RECEIPT ----------------
+uploaded_file = st.file_uploader("📤 Upload Receipt Image")
 
 if uploaded_file:
-
-    image = Image.open(uploaded_file)
-    st.image(image, caption="Receipt")
 
     # OCR
     text = extract_text(uploaded_file)
 
-    st.subheader("🧾 Extracted Text")
-    st.write(text)
+    st.subheader("🧾 Extracted Receipt Text")
+    st.text_area("", text, height=200)
 
-    # Parsing
-    parsed = parse_receipt(text)
+    # ---------------- AMOUNT EXTRACTION ----------------
+    amounts = re.findall(r"\d+\.\d{2}", text)
+    amount = float(amounts[0]) if amounts else 0.0
 
-    amount = parsed["total"]
-    subtotal = parsed["subtotal"]
-    tax = parsed["tax"]
-    gallons = parsed["gallons"]
+    # ---------------- CATEGORY LOGIC ----------------
+    text_lower = text.lower()
 
-    # ML Category
-    category, confidence = predict_category(text)
+    if "fuel" in text_lower or "gas" in text_lower:
+        category = "Travel"
+    elif "grocery" in text_lower or "food" in text_lower:
+        category = "Food"
+    else:
+        category = "Other"
 
-    # ----------------------------
-    # FRAUD MODEL
-    # ----------------------------
-    df = get_expenses()
-    model = train_fraud_model(df)
-
-    fraud_score = detect_fraud(model, amount)
-
-    # ----------------------------
-    # SAVE TO DB
-    # ----------------------------
+    # ---------------- SAVE ----------------
     add_expense(amount, category, text)
 
-    st.success("Transaction saved!")
+    st.success("Transaction saved successfully!")
 
+    st.subheader("💵 Detected Amount")
+    st.write(f"${amount:.2f}")
 
-    # ----------------------------
-    # DISPLAY RESULTS
-    # ----------------------------
-    col1, col2, col3 = st.columns(3)
+    st.subheader("📂 Category")
+    st.write(category)
 
-    col1.metric("💵 Total", f"${amount:.2f}")
-    col2.metric("🤖 Category", category)
-    col3.metric("🧠 Confidence", f"{confidence}%")
+# ---------------- DASHBOARD ----------------
+st.divider()
+st.subheader("📈 Spending Dashboard")
 
+expenses = get_expenses()
 
-    st.subheader("🚨 Fraud Detection")
+total_spent = sum([e[0] for e in expenses])
+transaction_count = len(expenses)
 
-    if fraud_score > 70:
-        st.error(f"High Fraud Risk: {fraud_score}/100")
-    elif fraud_score > 30:
-        st.warning(f"Medium Risk: {fraud_score}/100")
-    else:
-        st.success(f"Normal Transaction: {fraud_score}/100")
+st.metric("Total Spending", f"${total_spent:.2f}")
+st.metric("Transactions", transaction_count)
 
+# category breakdown
+category_totals = {}
+for amount, cat in expenses:
+    category_totals[cat] = category_totals.get(cat, 0) + amount
 
-    st.subheader("📊 Breakdown")
-    st.write(f"Subtotal: ${subtotal}")
-    st.write(f"Tax: ${tax}")
-    st.write(f"Gallons: {gallons}")
+st.bar_chart(category_totals)
 
+# ---------------- BUDGET SETTING ----------------
+st.divider()
+st.subheader("💰 Set Monthly Budget")
 
-# ----------------------------
-# DASHBOARD
-# ----------------------------
-st.markdown("---")
-st.subheader("📈 Dashboard")
+with st.form("budget_form"):
+    category = st.selectbox("Category", ["Food", "Travel", "Other"])
+    limit = st.number_input("Monthly Budget ($)", min_value=0.0, step=10.0)
 
-df = get_expenses()
+    submit = st.form_submit_button("Set Budget")
 
-if not df.empty:
+    if submit:
+        set_budget(category, limit)
+        st.success(f"Budget set: {category} = ${limit:.2f}")
 
-    total = df["amount"].sum()
-    avg = df["amount"].mean()
+# ---------------- BUDGET ALERTS ----------------
+st.subheader("⚠️ Budget Status")
 
-    c1, c2, c3 = st.columns(3)
+budgets = get_budgets()
 
-    c1.metric("Total Spending", f"${total:.2f}")
-    c2.metric("Average", f"${avg:.2f}")
-    c3.metric("Transactions", len(df))
+if budgets:
+    for cat, spent in category_totals.items():
+        if cat in budgets:
+            limit = budgets[cat]
 
-    st.subheader("📊 Category Breakdown")
-    st.bar_chart(df["category"].value_counts())
-
-    # ----------------------------
-    # BUDGET CHECK
-    # ----------------------------
-    st.subheader("💰 Budget Status")
-
-    budgets = dict(get_budgets())
-
-    for cat, limit in budgets.items():
-        spent = df[df["category"] == cat]["amount"].sum()
-        status = check_budget_status(cat, spent)
-
-        st.write(f"**{cat}**: ${spent:.2f} / ${limit}")
-
-        if status == "❌ OVER BUDGET":
-            st.error(status)
-        elif status == "⚠️ WARNING":
-            st.warning(status)
-        else:
-            st.success(status)
-
+            if spent > limit:
+                st.error(f"🚨 {cat}: OVER BUDGET (${spent:.2f} / ${limit:.2f})")
+            else:
+                st.success(f"✅ {cat}: OK (${spent:.2f} / ${limit:.2f})")
 else:
-    st.info("No transactions yet.")
+    st.info("No budgets set yet.")
