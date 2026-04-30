@@ -1,160 +1,114 @@
 import streamlit as st
-import pandas as pd
-import re
-import numpy as np
+from PIL import Image
 
+# Local modules
+from ocr import extract_text
+from receipt_parser import parse_receipt
 from classifier import predict_category
 from database import add_expense, get_expenses
 
 
 # ----------------------------
-# SAFE OCR WRAPPER (NO CRASH)
+# PAGE CONFIG
 # ----------------------------
-def safe_extract_text(file):
-    try:
-        from ocr import extract_text
-        return extract_text(file)
-    except:
-        return f"Receipt uploaded: {file.name}"
-
-
-# ----------------------------
-# RECEIPT PARSER (ENHANCED)
-# ----------------------------
-def parse_receipt(text):
-    text = text.upper()
-
-    def find(patterns):
-        for p in patterns:
-            m = re.search(p, text)
-            if m:
-                return float(m.group(1))
-        return None
-
-    total = find([
-        r"TOTAL\s*\$?\s*([0-9]+\.?[0-9]{2})",
-        r"AMOUNT\s*DUE\s*\$?\s*([0-9]+\.?[0-9]{2})",
-        r"BALANCE\s*\$?\s*([0-9]+\.?[0-9]{2})",
-    ])
-
-    subtotal = find([r"SUBTOTAL\s*\$?\s*([0-9]+\.?[0-9]{2})"])
-    tax = find([r"TAX\s*\$?\s*([0-9]+\.?[0-9]{2})"])
-    gallons = find([r"GALLONS\s*([0-9]+\.?[0-9]*)"])
-
-    return {
-        "total": total or 0.0,
-        "subtotal": subtotal or 0.0,
-        "tax": tax or 0.0,
-        "gallons": gallons or 0.0
-    }
-
-
-# ----------------------------
-# FRAUD DETECTION (ANOMALY LOGIC)
-# ----------------------------
-def fraud_score(amount, df):
-    if len(df) < 5:
-        return 0  # not enough data
-
-    mean = df["amount"].mean()
-    std = df["amount"].std() if df["amount"].std() > 0 else 1
-
-    z_score = abs((amount - mean) / std)
-
-    if z_score > 3:
-        return 90  # high risk
-    elif z_score > 2:
-        return 60  # medium risk
-    elif z_score > 1.5:
-        return 30  # low risk
-    else:
-        return 5   # normal
-
-
-# ----------------------------
-# CONFIDENCE SCORE (AI QUALITY METRIC)
-# ----------------------------
-def confidence_score(text, parsed):
-    score = 50
-
-    if parsed["total"] > 0:
-        score += 20
-    if parsed["tax"] > 0:
-        score += 10
-    if parsed["subtotal"] > 0:
-        score += 10
-    if "TOTAL" in text.upper():
-        score += 10
-
-    return min(score, 100)
-
-
-# ----------------------------
-# UI
-# ----------------------------
-st.set_page_config(page_title="AI Expense Tracker", layout="wide")
+st.set_page_config(
+    page_title="AI Expense Tracker",
+    page_icon="📊",
+    layout="wide"
+)
 
 st.title("📊 AI Expense & Budget Intelligence System")
-st.caption("Smart Receipt Processing • Fraud Detection • Budget Analytics")
-
-uploaded_file = st.file_uploader("📤 Upload Receipt Image", type=["jpg", "png", "jpeg"])
-
-df = get_expenses()
-df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+st.subheader("Smart Receipt Processing • Categorization • Analytics")
 
 
 # ----------------------------
-# MAIN PROCESSING
+# SIDEBAR - UPLOAD
+# ----------------------------
+st.sidebar.header("📤 Upload Receipt")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload receipt image",
+    type=["png", "jpg", "jpeg"]
+)
+
+
+# ----------------------------
+# MAIN LOGIC
 # ----------------------------
 if uploaded_file:
 
-    text = safe_extract_text(uploaded_file)
+    # Show image
+    image = Image.open(uploaded_file)
+    st.image(image, caption="Uploaded Receipt", use_column_width=True)
+
+    # OCR STEP
+    text = extract_text(uploaded_file)
+
+    st.markdown("## 🧾 Extracted Text")
+    st.write(text)
+
+    # ----------------------------
+    # PARSE RECEIPT (SAFE)
+    # ----------------------------
     parsed = parse_receipt(text)
 
-    amount = parsed["total"]
-
-    category = predict_category(text)
-
-    fraud = fraud_score(amount, df)
-    confidence = confidence_score(text, parsed)
+    amount = parsed.get("total", 0.0)
+    subtotal = parsed.get("subtotal", 0.0)
+    tax = parsed.get("tax", 0.0)
+    gallons = parsed.get("gallons", 0.0)
 
     # ----------------------------
-    # DISPLAY RECEIPT
+    # ML CATEGORY
     # ----------------------------
-    st.subheader("🧾 Receipt Analysis")
+    category, confidence = predict_category(text)
 
+    # ----------------------------
+    # FRAUD DETECTION (RULE-BASED MVP)
+    # ----------------------------
+    fraud_score = 0
+
+    if amount > 500:
+        fraud_score += 40
+    if "REFUND" in text.upper():
+        fraud_score += 30
+    if amount == 0:
+        fraud_score += 50
+
+    fraud_label = "⚠️ Suspicious" if fraud_score > 50 else "✅ Normal"
+
+
+    # ----------------------------
+    # UI RESULTS
+    # ----------------------------
     col1, col2, col3 = st.columns(3)
 
-    col1.metric("💵 Total", f"${amount:.2f}")
-    col2.metric("🤖 Category", category)
-    col3.metric("🧠 Confidence", f"{confidence}%")
+    with col1:
+        st.metric("💵 Total", f"${amount:.2f}")
 
-    st.progress(confidence / 100)
+    with col2:
+        st.metric("🤖 Category", category)
 
-    # ----------------------------
-    # FRAUD ALERT
-    # ----------------------------
-    if fraud > 70:
-        st.error("🚨 HIGH FRAUD RISK DETECTED")
-    elif fraud > 40:
-        st.warning("⚠️ Medium risk transaction")
-    else:
-        st.success("✅ Normal transaction")
+    with col3:
+        st.metric("🧠 Confidence", f"{confidence}%")
 
-    st.caption(f"Fraud Score: {fraud}/100")
+    st.markdown("### 🚨 Fraud Analysis")
+    st.write(f"Fraud Score: **{fraud_score}/100**")
+    st.write(f"Status: {fraud_label}")
 
     # ----------------------------
     # BREAKDOWN
     # ----------------------------
-    st.subheader("📊 Financial Breakdown")
+    st.markdown("### 📊 Financial Breakdown")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Subtotal", f"${parsed['subtotal']:.2f}")
-    c2.metric("Tax", f"${parsed['tax']:.2f}")
-    c3.metric("Gallons", parsed["gallons"])
+    b1, b2, b3 = st.columns(3)
+
+    b1.metric("Subtotal", f"${subtotal:.2f}")
+    b2.metric("Tax", f"${tax:.2f}")
+    b3.metric("Gallons", f"{gallons:.2f}")
+
 
     # ----------------------------
-    # SAVE
+    # SAVE TO DATABASE
     # ----------------------------
     add_expense(amount, category, text)
 
@@ -162,24 +116,27 @@ if uploaded_file:
 
 
 # ----------------------------
-# DASHBOARD
+# DASHBOARD (HISTORY)
 # ----------------------------
 st.markdown("---")
-st.subheader("📈 Business Dashboard")
+st.markdown("## 📈 Business Dashboard")
 
-if len(df) > 0:
+df = get_expenses()
+
+if not df.empty:
+
+    total_spending = df["amount"].sum()
+    avg_expense = df["amount"].mean()
+    count = len(df)
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("Total Spending", f"${df['amount'].sum():.2f}")
-    c2.metric("Average Expense", f"${df['amount'].mean():.2f}")
-    c3.metric("Transactions", len(df))
+    c1.metric("Total Spending", f"${total_spending:.2f}")
+    c2.metric("Average Expense", f"${avg_expense:.2f}")
+    c3.metric("Transactions", count)
 
-    st.subheader("📊 Category Breakdown")
-    st.bar_chart(df.groupby("category")["amount"].sum())
-
-    st.subheader("📜 Recent Transactions")
-    st.dataframe(df.tail(10))
+    st.markdown("### 📊 Category Breakdown")
+    st.bar_chart(df["category"].value_counts())
 
 else:
-    st.info("Upload receipts to build your financial dashboard.")
+    st.info("No transactions yet. Upload a receipt to begin.")
