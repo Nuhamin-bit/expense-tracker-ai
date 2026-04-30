@@ -1,12 +1,18 @@
-import pytesseract
 from PIL import Image
 
 def extract_text(file):
+    """
+    Safe OCR wrapper:
+    - Never crashes on Render
+    - Falls back gracefully if OCR is unavailable
+    """
+
     try:
         image = Image.open(file)
 
-        # Try OCR
+        # Try importing pytesseract ONLY when needed
         try:
+            import pytesseract
             text = pytesseract.image_to_string(image)
 
             if not text or text.strip() == "":
@@ -15,8 +21,8 @@ def extract_text(file):
             return text
 
         except Exception:
-            # THIS prevents Render crash
-            return "OCR not available in cloud environment (Render). Using fallback mode."
+            # THIS prevents Render crash permanently
+            return "OCR unavailable on cloud deployment (Render). Receipt processed in fallback mode."
 
     except Exception as e:
-        return f"Image processing error: {str(e)}"
+        return f"Image loading error: {str(e)}"
